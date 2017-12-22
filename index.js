@@ -163,6 +163,29 @@ async.waterfall([
 		});
 	},
 	(s3, folders, documents, callback) => {
+		async.eachLimit(folders, 15, (folder, callback) => {
+			s3.putObject({
+				Bucket: opts.bucket,
+				Key: folder.href.self.slice(-36),
+				Metadata: {
+					'filepath': folder.path
+				}
+			}, (err, data) => {
+				if (err) {
+					return callback(err);
+				}
+
+				callback();
+			});
+		}, (err) => {
+			if (err) {
+				return callback(err);
+			}
+
+			callback(null, s3, folders, documents);
+		});
+	},
+	(s3, folders, documents, callback) => {
 		async.eachLimit(documents, 15, (doc, callback) => {
 			var stream = new MemoryStream();
 
