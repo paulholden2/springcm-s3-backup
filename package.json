@@ -26,6 +26,9 @@
   "dependencies": {
     "async": "^2.6.0",
     "aws-sdk": "^2.173.0",
-    "springcm-node-sdk": "^0.1.6"
+    "command-line-args": "^4.0.7",
+    "command-line-commands": "^2.0.1",
+    "dotenv": "^4.0.0",
+    "springcm-node-sdk": "^0.1.8"
   }
 }
