@@ -322,7 +322,7 @@ function backup(opts) {
 
 								if (data.Metadata.filename !== doc.name || data.Metadata.filepath !== doc.path) {
 									if (opts.verbose) {
-										console.log(`document/${docid} up-to-date; updating tags`);
+										console.log(`document/${docid} up-to-date; updating metadata`);
 									}
 
 									s3.copyObject({
