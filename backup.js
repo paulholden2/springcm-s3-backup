@@ -79,7 +79,25 @@ function backup(opts) {
 						return callback(err);
 					}
 
-					callback(null, documents);
+					async.mapSeries(documents, (d, callback) => {
+						if (opts.verbose) {
+							console.log('Getting attributes for document/' + d.href.self.slice(-36));
+						}
+
+						SpringCM.document.uid(d.href.self.slice(-36), (err, doc) => {
+							if (err) {
+								return callback(err);
+							}
+
+							callback(null, doc);
+						});
+					}, (err, documents) => {
+						if (err) {
+							return callback(err);
+						}
+
+						callback(null, documents);
+					});
 				});
 			}, (err, results) => {
 				if (err) {
@@ -87,7 +105,7 @@ function backup(opts) {
 				}
 
 				callback(null, folders, [].concat.apply([], results));
-			})
+			});
 		},
 		(folders, documents, callback) => {
 			callback(null, folders, documents);
@@ -234,12 +252,12 @@ function backup(opts) {
 			callback(null, s3, folders, documents, depot);
 		},
 		(s3, folders, documents, depot, callback) => {
-			if (opts.verbose) {
-				console.log('Backing up folders');
-			}
-
 			async.eachLimit(folders, 15, (folder, callback) => {
 				const key = 'folder/' + folder.href.self.slice(-36);
+
+				if (opts.verbose) {
+					console.log(`Backing up ${folder.path} to ${key}`);
+				}
 
 				s3.putObject({
 					Bucket: process.env.S3_BUCKET,
@@ -366,11 +384,28 @@ function backup(opts) {
 									if (opts.verbose) {
 										console.log(`document/${docid} up-to-date; nothing changed`);
 									}
-								}
 
-								callback();
+									callback();
+								}
 							});
 						}
+					},
+					(callback) => {
+						if (opts.verbose) {
+							console.log(`attributes/${docid} attributes saved`);
+						}
+
+						s3.putObject({
+							Body: JSON.stringify(doc.attributes),
+							Bucket: process.env.S3_BUCKET,
+							Key: 'attributes/' + docid
+						}, (err) => {
+							if (err) {
+								return callback(err);
+							}
+
+							callback();
+						});
 					},
 					(callback) => {
 						delete depot.documents[key];
