@@ -38,7 +38,7 @@ function backup(opts) {
 				console.log('Authenticating with SpringCM API user');
 			}
 
-			SpringCM.auth.login(opts['data-center'], opts.id, opts.secret, (err, token) => {
+			SpringCM.auth.login(process.env.SPRINGCM_DATACENTER, process.env.SPRINGCM_CLIENT_ID, process.env.SPRINGCM_CLIENT_SECRET, (err, token) => {
 				if (err) {
 					return callback(err);
 				}
@@ -99,7 +99,7 @@ function backup(opts) {
 		},
 		(s3, folders, documents, callback) => {
 			if (opts.verbose) {
-				console.log('Locating bucket: ' + opts.bucket);
+				console.log('Locating bucket: ' + process.env.S3_BUCKET);
 			}
 
 			s3.listBuckets({}, (err, data) => {
@@ -107,8 +107,8 @@ function backup(opts) {
 					return callback(err);
 				}
 
-				if (data.Buckets.map(bucket => bucket.Name).indexOf(opts.bucket) < 0) {
-					return callback(new Error('No such bucket: ' + opts.bucket));
+				if (data.Buckets.map(bucket => bucket.Name).indexOf(process.env.S3_BUCKET) < 0) {
+					return callback(new Error('No such bucket: ' + process.env.S3_BUCKET));
 				}
 
 				callback(null, s3, folders, documents);
@@ -126,7 +126,7 @@ function backup(opts) {
 				return count === 0;
 			}, (callback) => {
 				var params = {
-					Bucket: opts.bucket,
+					Bucket: process.env.S3_BUCKET,
 					Prefix: 'document/',
 					MaxKeys: 1000
 				};
@@ -166,7 +166,7 @@ function backup(opts) {
 				return count === 0;
 			}, (callback) => {
 				var params = {
-					Bucket: opts.bucket,
+					Bucket: process.env.S3_BUCKET,
 					Prefix: 'folder/',
 					MaxKeys: 1000
 				};
@@ -220,7 +220,7 @@ function backup(opts) {
 				const key = 'folder/' + folder.href.self.slice(-36);
 
 				s3.putObject({
-					Bucket: opts.bucket,
+					Bucket: process.env.S3_BUCKET,
 					Key: key,
 					Metadata: {
 						'filepath': folder.path
@@ -298,7 +298,7 @@ function backup(opts) {
 
 							s3.putObject({
 								Body: buffer,
-								Bucket: opts.bucket,
+								Bucket: process.env.S3_BUCKET,
 								Key: key,
 								Metadata: {
 									filename: doc.name,
@@ -313,7 +313,7 @@ function backup(opts) {
 							});
 						} else {
 							s3.headObject({
-								Bucket: opts.bucket,
+								Bucket: process.env.S3_BUCKET,
 								Key: key
 							}, (err, data) => {
 								if (err) {
@@ -326,9 +326,9 @@ function backup(opts) {
 									}
 
 									s3.copyObject({
-										Bucket: opts.bucket,
+										Bucket: process.env.S3_BUCKET,
 										Key: key,
-										CopySource: urlencode(`${opts.bucket}/${key}`),
+										CopySource: urlencode(`${process.env.S3_BUCKET}/${key}`),
 										Metadata: {
 											filename: doc.name,
 											filepath: doc.path
@@ -373,7 +373,7 @@ function backup(opts) {
 
 			async.eachLimit(keys, 15, (obj, callback) => {
 				s3.deleteObject({
-					Bucket: opts.bucket,
+					Bucket: process.env.S3_BUCKET,
 					Key: obj
 				}, (err, data) => {
 					if (err) {

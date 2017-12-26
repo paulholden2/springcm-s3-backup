@@ -1,3 +1,5 @@
+const path = require('path');
+const dotenv = require('dotenv');
 const clcmd = require('command-line-commands');
 const clarg = require('command-line-args');
 const clusg = require('command-line-usage');
@@ -17,27 +19,9 @@ const options = [
 		type: Boolean
 	},
 	{
-		name: 'data-center',
-		alias: 'd',
-		description: 'The SpringCM data center for the account to use.',
-		type: String
-	},
-	{
-		name: 'id',
-		alias: 'i',
-		description: 'The client ID for the SpringCM API user to authenticate with.',
-		type: String
-	},
-	{
-		name: 'secret',
-		alias: 's',
-		description: 'The client secret for the SpringCM API user to authenticate with.',
-		type: String
-	},
-	{
-		name: 'bucket',
-		alias: 'b',
-		description: 'The name of the AWS S3 bucket.',
+		name: 'config',
+		alias: 'c',
+		description: 'The path to the .env file to use.',
 		type: String
 	},
 	{
@@ -48,7 +32,9 @@ const options = [
 	}
 ];
 
-const { command, argv } = clcmd(commands, process.argv.slice(2, process.argv.length));
+const cmd = clcmd(commands, process.argv.slice(2, process.argv.length));
+const command = cmd.command;
+const argv = cmd.argv;
 
 const opts = clarg(options, {
 	argv: argv
@@ -69,9 +55,15 @@ if (!command || opts.help) {
 	return console.log(clusg(sections));
 }
 
-if (command === 'backup' && opts.bucket && opts.id && opts.secret && opts['data-center']) {
+if (opts.config) {
+	dotenv.config({
+		path: path.join(__dirname, opts.config)
+	});
+}
+
+if (command === 'backup') {
 	backup(opts);
-} else if (command === 'restore' && opts.bucket && opts.id && opts.secret && opts['data-center']) {
+} else if (command === 'restore') {
 	console.log('Restore not supported yet');
 } else {
 	console.log(clusg(sections));
