@@ -108,11 +108,33 @@ function backup(opts) {
 				}
 
 				if (data.Buckets.map(bucket => bucket.Name).indexOf(process.env.S3_BUCKET) < 0) {
-					return callback(new Error('No such bucket: ' + process.env.S3_BUCKET));
+					return callback(null, false, s3, folders, documents);
 				}
 
-				callback(null, s3, folders, documents);
+				callback(null, true, s3, folders, documents);
 			});
+		},
+		(exists, s3, folders, documents, callback) => {
+			if (!exists) {
+				if (opts.verbose) {
+					console.log('Not found; creating new bucket: ' + process.env.S3_BUCKET);
+				}
+
+				s3.createBucket({
+					Bucket: process.env.S3_BUCKET,
+					CreateBucketConfiguration: {
+						LocationConstraint: 'us-east-1'
+					}
+				}, (err, data) => {
+					if (err) {
+						return callback(err);
+					}
+
+					callback(null, s3, folders, documents);
+				});
+			} else {
+				callback(null, s3, folders, documents);
+			}
 		},
 		(s3, folders, documents, callback) => {
 			var count = 1;
