@@ -25,6 +25,11 @@ const options = [
 		type: String
 	},
 	{
+		name: 'no-log',
+		description: 'Don\'t log backup to Zoho Reports',
+		type: Boolean
+	},
+	{
 		name: 'help',
 		alias: 'h',
 		description: 'Displays this usage dialog.',

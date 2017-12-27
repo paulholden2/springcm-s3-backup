@@ -1,36 +1,98 @@
 const urlencode = require('urlencode');
 const _ = require('lodash');
-const moment = require('moment');
+const moment = require('moment-timezone');
 const AWS = require('aws-sdk');
 const SpringCM = require('springcm-node-sdk');
 const async = require('async');
 const MemoryStream = require('memorystream');
 const s2b = require('stream-to-buffer');
+const zoho = require('zoho-node-sdk');
 
-function backup(opts) {
-	// Get all subfolders recursively, except for /Trash/ and its subfolders
-	function subfolders(root, callback) {
-		var folderlist = [ root ];
-		var q = async.queue((folder, callback) => {
-			SpringCM.folder.folders(folder, (err, folders) => {
+
+// Get all subfolders recursively, except for /Trash/ and its subfolders
+function subfolders(root, callback) {
+	var folderlist = [ root ];
+	var q = async.queue((folder, callback) => {
+		SpringCM.folder.folders(folder, (err, folders) => {
+			if (err) {
+				return callback(err);
+			}
+
+			folders = folders.filter(folder => folder.path !== '/Trash/');
+			folderlist = folderlist.concat(folders);
+			folders.forEach(folder => q.push(folder));
+			callback();
+		});
+	}, 15);
+
+	q.drain = () => {
+		callback(null, folderlist);
+	};
+
+	q.push(root);
+}
+
+function log_backup(opts, callback) {
+	async.waterfall([
+		(callback) => {
+			if (opts.verbose) {
+				console.log('Getting SpringCM account details');
+			}
+
+			SpringCM.account((err, account) => {
 				if (err) {
 					return callback(err);
 				}
 
-				folders = folders.filter(folder => folder.path !== '/Trash/');
-				folderlist = folderlist.concat(folders);
-				folders.forEach(folder => q.push(folder));
-				callback();
+				callback(null, account);
 			});
-		}, 15);
+		},
+		(account, callback) => {
+			if (!account) {
+				return callback();
+			}
 
-		q.drain = () => {
-			callback(null, folderlist);
-		};
+			zoho.reports(process.env.REPORTS_EMAIL_ID, process.env.REPORTS_AUTHTOKEN, (err, reports) => {
+				if (err) {
+					return callback(err);
+				}
 
-		q.push(root);
-	}
+				callback(null, reports, account);
+			});
+		},
+		(reports, account, callback) => {
+			if (!reports) {
+				return callback();
+			}
 
+			if (opts.verbose) {
+				console.log(`Logging successful backup for ${account.name} (${account.id})`);
+			}
+
+			reports.table('Client Reporting Database', 'SpringCM Backup History', (err, t) => {
+				if (err) {
+					return callback(err);
+				}
+
+				t.addrow({
+					'Account Name': account.name,
+					'Account ID': account.id,
+					'Date': moment.tz('America/Los_Angeles').format('MM/DD/YYYY HH:mm A')
+				}, (err, row) => {
+					if (err) {
+						return callback(err);
+					}
+
+					callback();
+				});
+			});
+		}
+	], (err) => {
+		callback(err);
+	});
+}
+
+function backup(opts) {
 	async.waterfall([
 		// SpringCM auth
 		(callback) => {
@@ -108,12 +170,26 @@ function backup(opts) {
 			});
 		},
 		(folders, documents, callback) => {
-			callback(null, folders, documents);
+			async.mapLimit(folders, 15, (f, callback) => {
+				const fuid = f.href.self.slice(-36);
+
+				if (opts.verbose) {
+					console.log('Getting attributes for folder/' + fuid);
+				}
+
+				SpringCM.folder.uid(fuid, (err, folder) => {
+					if (err) {
+						return callback(err);
+					}
+
+					callback(null, folder);
+				});
+			}, (err, result) => {
+				callback(null, result, documents);
+			});
 		},
 		(folders, documents, callback) => {
-			var s3 = new AWS.S3();
-
-			callback(null, s3, folders, documents);
+			callback(null, new AWS.S3(), folders, documents);
 		},
 		(s3, folders, documents, callback) => {
 			if (opts.verbose) {
@@ -253,24 +329,56 @@ function backup(opts) {
 		},
 		(s3, folders, documents, depot, callback) => {
 			async.eachLimit(folders, 15, (folder, callback) => {
-				const key = 'folder/' + folder.href.self.slice(-36);
+				const fuid = folder.href.self.slice(-36);
 
-				if (opts.verbose) {
-					console.log(`Backing up ${folder.path} to ${key}`);
-				}
+				async.waterfall([
+					(callback) => {
+						if (opts.verbose) {
+							console.log(`folder/${fuid} uploaded`);
+						}
 
-				s3.putObject({
-					Bucket: process.env.S3_BUCKET,
-					Key: key,
-					Metadata: {
-						'filepath': folder.path
+						s3.putObject({
+							Bucket: process.env.S3_BUCKET,
+							Key: 'folder/' + fuid,
+							Metadata: {
+								'filepath': folder.path
+							}
+						}, (err, data) => {
+							if (err) {
+								return callback(err);
+							}
+
+							callback();
+						});
+					},
+					(callback) => {
+						if (opts.verbose) {
+							console.log(`attributes/${fuid} uploaded`);
+						}
+
+						s3.putObject({
+							Body: JSON.stringify(folder.attributes),
+							Bucket: process.env.S3_BUCKET,
+							Key: 'attributes/' + fuid,
+							Metadata: {
+								'filepath': folder.path
+							}
+						}, (err, data) => {
+							if (err) {
+								return callback(err);
+							}
+
+							callback();
+						});
+					},
+					(callback) => {
+						delete depot.folders['folder/' + fuid];
+						callback();
 					}
-				}, (err, data) => {
+				], (err) => {
 					if (err) {
 						return callback(err);
 					}
-
-					delete depot.folders[key];
 
 					callback();
 				});
@@ -333,7 +441,7 @@ function backup(opts) {
 					(buffer, callback) => {
 						if (buffer) {
 							if (opts.verbose) {
-								console.log(`Backing up ${doc.path} to document/${docid}`);
+								console.log(`document/${docid} uploaded`);
 							}
 
 							s3.putObject({
@@ -392,7 +500,7 @@ function backup(opts) {
 					},
 					(callback) => {
 						if (opts.verbose) {
-							console.log(`attributes/${docid} attributes saved`);
+							console.log(`attributes/${docid} uploaded`);
 						}
 
 						s3.putObject({
@@ -450,6 +558,13 @@ function backup(opts) {
 
 				callback();
 			});
+		},
+		(callback) => {
+			if (opts['no-log']) {
+				return callback();
+			}
+
+			log_backup(opts, callback);
 		}
 	], (err) => {
 		if (err) {
