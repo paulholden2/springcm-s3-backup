@@ -8,7 +8,6 @@ const MemoryStream = require('memorystream');
 const s2b = require('stream-to-buffer');
 const zoho = require('zoho-node-sdk');
 
-
 // Get all subfolders recursively, except for /Trash/ and its subfolders
 function subfolders(root, callback) {
 	var folderlist = [ root ];
