@@ -108,15 +108,57 @@ function backup(opts) {
 			});
 		},
 		(callback) => {
+			callback(null, new AWS.S3());
+		},
+		(s3, callback) => {
+			if (opts.verbose) {
+				console.log('Locating bucket: ' + process.env.S3_BUCKET);
+			}
+
+			s3.listBuckets({}, (err, data) => {
+				if (err) {
+					return callback(err);
+				}
+
+				if (data.Buckets.map(bucket => bucket.Name).indexOf(process.env.S3_BUCKET) < 0) {
+					return callback(null, false, s3);
+				}
+
+				callback(null, true, s3);
+			});
+		},
+		(exists, s3, callback) => {
+			if (!exists) {
+				if (opts.verbose) {
+					console.log('Not found; creating new bucket: ' + process.env.S3_BUCKET);
+				}
+
+				s3.createBucket({
+					Bucket: process.env.S3_BUCKET,
+					CreateBucketConfiguration: {
+						LocationConstraint: 'us-east-1'
+					}
+				}, (err, data) => {
+					if (err) {
+						return callback(err);
+					}
+
+					callback(null, s3);
+				});
+			} else {
+				callback(null, s3);
+			}
+		},
+		(s3, callback) => {
 			SpringCM.folder.root((err, root) => {
 				if (err) {
 					return callback(err);
 				}
 
-				callback(null, root);
+				callback(null, s3, root);
 			});
 		},
-		(root, callback) => {
+		(s3, root, callback) => {
 			if (opts.verbose) {
 				console.log('Building SpringCM folder list');
 			}
@@ -126,10 +168,10 @@ function backup(opts) {
 					return callback(err);
 				}
 
-				callback(null, folders);
+				callback(null, s3, folders);
 			});
 		},
-		(folders, callback) => {
+		(s3, folders, callback) => {
 			if (opts.verbose) {
 				console.log('Building SpringCM document list');
 			}
@@ -165,10 +207,10 @@ function backup(opts) {
 					return callback(err);
 				}
 
-				callback(null, folders, [].concat.apply([], results));
+				callback(null, s3, folders, [].concat.apply([], results));
 			});
 		},
-		(folders, documents, callback) => {
+		(s3, folders, documents, callback) => {
 			async.mapLimit(folders, 15, (f, callback) => {
 				const fuid = f.href.self.slice(-36);
 
@@ -184,50 +226,8 @@ function backup(opts) {
 					callback(null, folder);
 				});
 			}, (err, result) => {
-				callback(null, result, documents);
+				callback(null, s3, result, documents);
 			});
-		},
-		(folders, documents, callback) => {
-			callback(null, new AWS.S3(), folders, documents);
-		},
-		(s3, folders, documents, callback) => {
-			if (opts.verbose) {
-				console.log('Locating bucket: ' + process.env.S3_BUCKET);
-			}
-
-			s3.listBuckets({}, (err, data) => {
-				if (err) {
-					return callback(err);
-				}
-
-				if (data.Buckets.map(bucket => bucket.Name).indexOf(process.env.S3_BUCKET) < 0) {
-					return callback(null, false, s3, folders, documents);
-				}
-
-				callback(null, true, s3, folders, documents);
-			});
-		},
-		(exists, s3, folders, documents, callback) => {
-			if (!exists) {
-				if (opts.verbose) {
-					console.log('Not found; creating new bucket: ' + process.env.S3_BUCKET);
-				}
-
-				s3.createBucket({
-					Bucket: process.env.S3_BUCKET,
-					CreateBucketConfiguration: {
-						LocationConstraint: 'us-east-1'
-					}
-				}, (err, data) => {
-					if (err) {
-						return callback(err);
-					}
-
-					callback(null, s3, folders, documents);
-				});
-			} else {
-				callback(null, s3, folders, documents);
-			}
 		},
 		(s3, folders, documents, callback) => {
 			var count = 1;
