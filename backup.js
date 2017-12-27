@@ -76,7 +76,7 @@ function log_backup(opts, callback) {
 				t.addrow({
 					'Account Name': account.name,
 					'Account ID': account.id,
-					'Date': moment.tz('America/Los_Angeles').format('MM/DD/YYYY HH:mm A')
+					'Date': moment.tz('America/Los_Angeles').format('MM/DD/YYYY hh:mm A')
 				}, (err, row) => {
 					if (err) {
 						return callback(err);
