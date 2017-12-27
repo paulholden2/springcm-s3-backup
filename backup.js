@@ -134,10 +134,7 @@ function backup(opts) {
 				}
 
 				s3.createBucket({
-					Bucket: process.env.S3_BUCKET,
-					CreateBucketConfiguration: {
-						LocationConstraint: 'us-east-1'
-					}
+					Bucket: process.env.S3_BUCKET
 				}, (err, data) => {
 					if (err) {
 						return callback(err);
