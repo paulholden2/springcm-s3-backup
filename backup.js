@@ -92,6 +92,10 @@ function log_backup(opts, callback) {
 }
 
 function backup(opts) {
+	var docUploads = 0;
+	var folderUploads = 0;
+	const parallel = 15;
+
 	async.waterfall([
 		// SpringCM auth
 		(callback) => {
@@ -143,10 +147,18 @@ function backup(opts) {
 					callback(null, s3);
 				});
 			} else {
+				if (opts.verbose) {
+					console.log(process.env.S3_BUCKET + ' found');
+				}
+
 				callback(null, s3);
 			}
 		},
 		(s3, callback) => {
+			if (opts.verbose) {
+				console.log('Getting root folder');
+			}
+
 			SpringCM.folder.root((err, root) => {
 				if (err) {
 					return callback(err);
@@ -156,83 +168,14 @@ function backup(opts) {
 			});
 		},
 		(s3, root, callback) => {
-			if (opts.verbose) {
-				console.log('Building SpringCM folder list');
-			}
-
-			subfolders(root, (err, folders) => {
-				if (err) {
-					return callback(err);
-				}
-
-				callback(null, s3, folders);
-			});
-		},
-		(s3, folders, callback) => {
-			if (opts.verbose) {
-				console.log('Building SpringCM document list');
-			}
-
-			async.mapLimit(folders, 15, (folder, callback) => {
-				SpringCM.folder.documents(folder, (err, documents) => {
-					if (err) {
-						return callback(err);
-					}
-
-					async.mapSeries(documents, (d, callback) => {
-						if (opts.verbose) {
-							console.log('Getting attributes for document/' + d.href.self.slice(-36));
-						}
-
-						SpringCM.document.uid(d.href.self.slice(-36), (err, doc) => {
-							if (err) {
-								return callback(err);
-							}
-
-							callback(null, doc);
-						});
-					}, (err, documents) => {
-						if (err) {
-							return callback(err);
-						}
-
-						callback(null, documents);
-					});
-				});
-			}, (err, results) => {
-				if (err) {
-					return callback(err);
-				}
-
-				callback(null, s3, folders, [].concat.apply([], results));
-			});
-		},
-		(s3, folders, documents, callback) => {
-			async.mapLimit(folders, 15, (f, callback) => {
-				const fuid = f.href.self.slice(-36);
-
-				if (opts.verbose) {
-					console.log('Getting attributes for folder/' + fuid);
-				}
-
-				SpringCM.folder.uid(fuid, (err, folder) => {
-					if (err) {
-						return callback(err);
-					}
-
-					callback(null, folder);
-				});
-			}, (err, result) => {
-				callback(null, s3, result, documents);
-			});
-		},
-		(s3, folders, documents, callback) => {
 			var count = 1;
 			var marker = null;
 			var depot = {
 				documents: [],
 				folders: []
 			};
+
+			console.log('Getting documents in S3');
 
 			async.until(() => {
 				return count === 0;
@@ -267,12 +210,16 @@ function backup(opts) {
 					return callback(err);
 				}
 
-				callback(null, s3, folders, documents, depot);
+				depot.documents = _.zipObject(depot.documents.map(d => d.Key), depot.documents);
+
+				callback(null, s3, root, depot);
 			});
 		},
-		(s3, folders, documents, depot, callback) => {
+		(s3, root, depot, callback) => {
 			var count = 1;
 			var marker = null;
+
+			console.log('Getting folders in S3');
 
 			async.until(() => {
 				return count === 0;
@@ -307,28 +254,63 @@ function backup(opts) {
 					return callback(err);
 				}
 
-				callback(null, s3, folders, documents, depot);
+				depot.folders = _.zipObject(depot.folders.map(f => f.Key), depot.folders);
+
+				callback(null, s3, root, depot);
 			});
 		},
-		(s3, folders, documents, depot, callback) => {
-			if (opts.verbose) {
-				console.log(`${folders.length} folders in SpringCM`);
-				console.log(`${documents.length} documents in SpringCM`);
-				console.log(`${depot.folders.length} folders backed up in S3`);
-				console.log(`${depot.documents.length} documents backed up in S3`);
-			}
-
-			depot.documents = _.zipObject(depot.documents.map(d => d.Key), depot.documents);
-			depot.folders = _.zipObject(depot.folders.map(f => f.Key), depot.folders);
-
-			callback(null, s3, folders, documents, depot);
-		},
-		(s3, folders, documents, depot, callback) => {
-			async.eachLimit(folders, 15, (folder, callback) => {
+		(s3, root, depot, callback) => {
+			var q = async.queue((folder, callback) => {
 				const fuid = folder.href.self.slice(-36);
 
 				async.waterfall([
 					(callback) => {
+						folderUploads += 1;
+						callback();
+					},
+					(callback) => {
+						// Queue up subfolders
+						SpringCM.folder.folders(folder, (err, folders) => {
+							if (err) {
+								return callback(err);
+							}
+
+							folders.filter(f => f.name !== 'Trash').forEach(f => q.push(f));
+							callback(null, folder);
+						});
+					},
+					(folder, callback) => {
+						// Request folder to get attributes
+						SpringCM.folder.uid(folder.href.self.slice(-36), (err, fld) => {
+							if (err) {
+								return callback(err);
+							}
+
+							callback(null, fld);
+						});
+					},
+					(folder, callback) => {
+						// Upload folders to S3
+						if (opts.verbose) {
+							console.log('folder/' + fuid + ' uploaded');
+						}
+
+						s3.putObject({
+							Bucket: process.env.S3_BUCKET,
+							Key: 'folder/' + fuid,
+							Metadata: {
+								'filepath': folder.path
+							}
+						}, (err, data) => {
+							if (err) {
+								return callback(err);
+							}
+
+							callback(null, folder);
+						});
+					},
+					(folder, callback) => {
+						// Upload folder
 						if (opts.verbose) {
 							console.log(`folder/${fuid} uploaded`);
 						}
@@ -344,10 +326,13 @@ function backup(opts) {
 								return callback(err);
 							}
 
-							callback();
+							delete depot.folders['folder/' + fuid]
+
+							callback(null, folder);
 						});
 					},
-					(callback) => {
+					(folder, callback) => {
+						// Upload folder attributes
 						if (opts.verbose) {
 							console.log(`attributes/${fuid} uploaded`);
 						}
@@ -364,175 +349,194 @@ function backup(opts) {
 								return callback(err);
 							}
 
-							callback();
+							callback(null, folder);
 						});
 					},
-					(callback) => {
-						delete depot.folders['folder/' + fuid];
-						callback();
-					}
-				], (err) => {
-					if (err) {
-						return callback(err);
-					}
-
-					callback();
-				});
-			}, (err) => {
-				if (err) {
-					return callback(err);
-				}
-
-				callback(null, s3, folders, documents, depot);
-			});
-		},
-		(s3, folders, documents, depot, callback) => {
-			async.eachLimit(documents, 15, (doc, callback) => {
-				var memstream = new MemoryStream();
-				const docid = doc.href.self.slice(-36);
-				const key = 'document/' + docid;
-
-				async.waterfall([
-					(callback) => {
-						if (depot.documents.hasOwnProperty(key)) {
-							var lastBackup = moment(depot.documents[key].LastModified);
-							var updated = moment(doc.updated);
-
-							// If the last backup date of the doc is after the
-							// update date on the doc in SpringCM, no need to back up
-							if (lastBackup.isAfter(updated)) {
-								return callback(null, true);
-							}
-						}
-
-						// Default to making a backup of the doc
-						return callback(null, false);
-					},
-					(recent, callback) => {
-						if (recent) {
-							return callback(null, null);
-						}
-
-						SpringCM.document.download(doc, memstream, (err) => {
+					(folder, callback) => {
+						// Request document to get attributes
+						SpringCM.folder.documents(folder, (err, documents) => {
 							if (err) {
 								return callback(err);
 							}
 
-							callback(null, memstream);
-						});
-					},
-					(stream, callback) => {
-						if (!stream) {
-							return callback(null, null);
-						}
+							docUploads += documents.length;
 
-						s2b(stream, (err, buffer) => {
-							if (err) {
-								return callback(err);
-							}
-
-							callback(null, buffer);
-						});
-					},
-					(buffer, callback) => {
-						if (buffer) {
-							if (opts.verbose) {
-								console.log(`document/${docid} uploaded`);
-							}
-
-							s3.putObject({
-								Body: buffer,
-								Bucket: process.env.S3_BUCKET,
-								Key: key,
-								Metadata: {
-									filename: doc.name,
-									filepath: doc.path
-								}
-							}, (err, data) => {
-								if (err) {
-									return callback(err);
-								}
-
-								callback();
-							});
-						} else {
-							s3.headObject({
-								Bucket: process.env.S3_BUCKET,
-								Key: key
-							}, (err, data) => {
-								if (err) {
-									return callback(err);
-								}
-
-								if (data.Metadata.filename !== doc.name || data.Metadata.filepath !== doc.path) {
-									if (opts.verbose) {
-										console.log(`document/${docid} up-to-date; updating metadata`);
+							async.mapSeries(documents, (doc, callback) => {
+								SpringCM.document.uid(doc.href.self.slice(-36), (err, doc) => {
+									if (err) {
+										return callback(err);
 									}
 
-									s3.copyObject({
-										Bucket: process.env.S3_BUCKET,
-										Key: key,
-										CopySource: urlencode(`${process.env.S3_BUCKET}/${key}`),
-										Metadata: {
-											filename: doc.name,
-											filepath: doc.path
+									callback(null, doc);
+								});
+							}, (err, documents) => {
+								if (err) {
+									return callback(err);
+								}
+
+								callback(null, documents);
+							});
+						});
+					},
+					(documents, callback) => {
+						async.eachSeries(documents, (doc, callback) => {
+							const docid = doc.href.self.slice(-36);
+							const key = 'document/' + docid;
+
+							async.waterfall([
+								(callback) => {
+									if (depot.documents.hasOwnProperty(key)) {
+										var lastBackup = moment(depot.documents[key].LastModified);
+										var updated = moment(doc.updated);
+
+										// If the last backup date of the doc is after the
+										// update date on the doc in SpringCM, no need to back up
+										if (lastBackup.isAfter(updated)) {
+											return callback(null, true);
 										}
-									}, (err, data) => {
+									}
+
+									// Default to making a backup of the doc
+									return callback(null, false);
+								},
+								(recent, callback) => {
+									if (recent) {
+										return callback(null, null);
+									}
+
+									var stream = new MemoryStream();
+
+									SpringCM.document.download(doc, stream, (err) => {
+										if (err) {
+											return callback(err);
+										}
+
+										callback(null, stream);
+									});
+								},
+								(stream, callback) => {
+									if (!stream) {
+										return callback(null, null);
+									}
+
+									s2b(stream, (err, buffer) => {
+										if (err) {
+											return callback(err);
+										}
+
+										callback(null, buffer);
+									});
+								},
+								(buffer, callback) => {
+									if (buffer) {
+										if (opts.verbose) {
+											console.log(`document/${docid} uploaded`);
+										}
+
+										s3.putObject({
+											Body: buffer,
+											Bucket: process.env.S3_BUCKET,
+											Key: key,
+											Metadata: {
+												filename: doc.name,
+												filepath: doc.path
+											}
+										}, (err, data) => {
+											if (err) {
+												return callback(err);
+											}
+
+											callback();
+										});
+									} else {
+										s3.headObject({
+											Bucket: process.env.S3_BUCKET,
+											Key: key
+										}, (err, data) => {
+											if (err) {
+												return callback(err);
+											}
+
+											if (data.Metadata.filename !== doc.name || data.Metadata.filepath !== doc.path) {
+												if (opts.verbose) {
+													console.log(`document/${docid} up-to-date; updating metadata`);
+												}
+
+												s3.copyObject({
+													Bucket: process.env.S3_BUCKET,
+													Key: key,
+													CopySource: urlencode(`${process.env.S3_BUCKET}/${key}`),
+													Metadata: {
+														filename: doc.name,
+														filepath: doc.path
+													}
+												}, (err, data) => {
+													if (err) {
+														return callback(err);
+													}
+
+													callback();
+												});
+											} else {
+												if (opts.verbose) {
+													console.log(`document/${docid} up-to-date; nothing changed`);
+												}
+
+												callback();
+											}
+										});
+									}
+								},
+								(callback) => {
+									if (opts.verbose) {
+										console.log(`attributes/${docid} uploaded`);
+									}
+
+									s3.putObject({
+										Body: JSON.stringify(doc.attributes),
+										Bucket: process.env.S3_BUCKET,
+										Key: 'attributes/' + docid
+									}, (err) => {
 										if (err) {
 											return callback(err);
 										}
 
 										callback();
 									});
-								} else {
-									if (opts.verbose) {
-										console.log(`document/${docid} up-to-date; nothing changed`);
-									}
+								},
+								(callback) => {
+									delete depot.documents[key];
 
 									callback();
 								}
+							], (err) => {
+								callback(err);
 							});
-						}
-					},
-					(callback) => {
-						if (opts.verbose) {
-							console.log(`attributes/${docid} uploaded`);
-						}
-
-						s3.putObject({
-							Body: JSON.stringify(doc.attributes),
-							Bucket: process.env.S3_BUCKET,
-							Key: 'attributes/' + docid
 						}, (err) => {
 							if (err) {
 								return callback(err);
 							}
 
-							callback();
+							callback(null);
 						});
-					},
-					(callback) => {
-						delete depot.documents[key];
-
-						callback();
 					}
 				], (err) => {
 					callback(err);
 				});
-			}, (err) => {
-				if (err) {
-					return callback(err);
-				}
+			}, parallel);
 
-				callback(null, s3, folders, documents, depot);
-			});
+			q.push(root);
+
+			q.drain = () => {
+				callback(null, s3, depot);
+			};
 		},
-		(s3, folders, documents, depot, callback) => {
+		(s3, depot, callback) => {
 			var keys = [];
 
 			keys = keys.concat(Object.keys(depot.documents), Object.keys(depot.folders));
 
-			async.eachLimit(keys, 15, (obj, callback) => {
+			async.eachSeries(keys, (obj, callback) => {
 				s3.deleteObject({
 					Bucket: process.env.S3_BUCKET,
 					Key: obj
@@ -556,6 +560,14 @@ function backup(opts) {
 			});
 		},
 		(callback) => {
+			if (opts.verbose) {
+				console.log(`${docUploads} documents uploaded`);
+				console.log(`${folderUploads} folders uploaded`);
+			}
+
+			callback();
+		},
+		(callback) => {
 			if (opts['no-log']) {
 				return callback();
 			}
@@ -564,7 +576,7 @@ function backup(opts) {
 		}
 	], (err) => {
 		if (err) {
-			return console.log(err);
+			console.log(err);
 		}
 	});
 }
