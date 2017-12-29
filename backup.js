@@ -8,29 +8,6 @@ const MemoryStream = require('memorystream');
 const s2b = require('stream-to-buffer');
 const zoho = require('zoho-node-sdk');
 
-// Get all subfolders recursively, except for /Trash/ and its subfolders
-function subfolders(root, callback) {
-	var folderlist = [ root ];
-	var q = async.queue((folder, callback) => {
-		SpringCM.folder.folders(folder, (err, folders) => {
-			if (err) {
-				return callback(err);
-			}
-
-			folders = folders.filter(folder => folder.path !== '/Trash/');
-			folderlist = folderlist.concat(folders);
-			folders.forEach(folder => q.push(folder));
-			callback();
-		});
-	}, 15);
-
-	q.drain = () => {
-		callback(null, folderlist);
-	};
-
-	q.push(root);
-}
-
 function log_backup(opts, callback) {
 	async.waterfall([
 		(callback) => {
