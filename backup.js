@@ -404,9 +404,12 @@ function backup(opts) {
 										return callback(null, null);
 									}
 
-									var stream = new MemoryStream();
+									var stream;
 
-									SpringCM.document.download(doc, stream, (err) => {
+									SpringCM.document.download(doc, () => {
+										stream = new MemoryStream();
+										return stream;
+									}, (err) => {
 										if (err) {
 											return callback(err);
 										}
