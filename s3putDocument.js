@@ -5,8 +5,7 @@ const async = require('async');
 module.exports = (s3, doc, key, buffer, callback) => {
 	const maxsz = 1024 * 1024 * 10;
 
-	console.log(`Uploading ${key}`);
-	console.log(`${buffer.length} bytes (~${(buffer.length / 1024).toFixed(3)} KiB)`);
+	console.log(`Uploading ${key} (~${(buffer.length / 1024).toFixed(3)} KiB)`);
 
 	if (buffer.length < maxsz) {
 		s3.putObject({
@@ -64,6 +63,8 @@ module.exports = (s3, doc, key, buffer, callback) => {
 						if (err) {
 							return callback(err);
 						}
+
+						console.log(`Uploaded part ${part} of ${key}`);
 
 						callback(null, {
 							ETag: data.ETag,
