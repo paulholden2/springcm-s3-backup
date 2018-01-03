@@ -7,6 +7,7 @@ const async = require('async');
 const MemoryStream = require('memorystream');
 const s2b = require('stream-to-buffer');
 const zoho = require('zoho-node-sdk');
+const s3putDocument = require('./s3putDocument.js');
 
 function log_backup(opts, callback) {
 	async.waterfall([
@@ -252,7 +253,7 @@ function backup(opts) {
 								return callback(err);
 							}
 
-							folders.filter(f => f.name !== 'Trash').forEach(f => q.push(f));
+							//folders.filter(f => f.name !== 'Trash').forEach(f => q.push(f));
 							callback(null, folder);
 						});
 					},
@@ -264,26 +265,6 @@ function backup(opts) {
 							}
 
 							callback(null, fld);
-						});
-					},
-					(folder, callback) => {
-						// Upload folders to S3
-						if (opts.verbose) {
-							console.log('folder/' + fuid + ' uploaded');
-						}
-
-						s3.putObject({
-							Bucket: process.env.S3_BUCKET,
-							Key: 'folder/' + fuid,
-							Metadata: {
-								'filepath': folder.path
-							}
-						}, (err, data) => {
-							if (err) {
-								return callback(err);
-							}
-
-							callback(null, folder);
 						});
 					},
 					(folder, callback) => {
@@ -413,15 +394,7 @@ function backup(opts) {
 											console.log(`document/${docid} uploaded`);
 										}
 
-										s3.putObject({
-											Body: buffer,
-											Bucket: process.env.S3_BUCKET,
-											Key: key,
-											Metadata: {
-												filename: doc.name,
-												filepath: doc.path
-											}
-										}, (err, data) => {
+										s3putDocument(s3, doc, key, buffer, (err, data) => {
 											if (err) {
 												return callback(err);
 											}
