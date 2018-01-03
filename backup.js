@@ -358,7 +358,7 @@ function backup(opts) {
 									return callback(null, false);
 								},
 								(recent, callback) => {
-									if (recent) {
+									if (recent && !opts.overwrite) {
 										return callback(null, null);
 									}
 

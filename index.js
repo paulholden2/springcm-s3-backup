@@ -30,6 +30,12 @@ const options = [
 		type: Boolean
 	},
 	{
+		name: 'overwrite',
+		alias: 'o',
+		description: 'Always update content in S3, even if it is already recent',
+		type: Boolean
+	},
+	{
 		name: 'help',
 		alias: 'h',
 		description: 'Displays this usage dialog.',
