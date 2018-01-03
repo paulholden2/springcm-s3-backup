@@ -253,7 +253,7 @@ function backup(opts) {
 								return callback(err);
 							}
 
-							//folders.filter(f => f.name !== 'Trash').forEach(f => q.push(f));
+							folders.filter(f => f.name !== 'Trash').forEach(f => q.push(f));
 							callback(null, folder);
 						});
 					},
