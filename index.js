@@ -36,6 +36,13 @@ const options = [
 		type: Boolean
 	},
 	{
+		name: 'parallel',
+		alias: 'p',
+		description: 'How many concurrent requests to run. Must be >= 1',
+		defaultValue: 10,
+		type: Number
+	},
+	{
 		name: 'help',
 		alias: 'h',
 		description: 'Displays this usage dialog.',
@@ -62,7 +69,7 @@ const sections = [
 	}
 ];
 
-if (!command || opts.help) {
+if (!command || opts.help || opts.parallel < 1) {
 	return console.log(clusg(sections));
 }
 

@@ -72,7 +72,7 @@ function log_backup(opts, callback) {
 function backup(opts) {
 	var docUploads = 0;
 	var folderUploads = 0;
-	const parallel = 15;
+	const parallel = opts.parallel;
 
 	async.waterfall([
 		// SpringCM auth
@@ -390,10 +390,6 @@ function backup(opts) {
 								},
 								(buffer, callback) => {
 									if (buffer) {
-										if (opts.verbose) {
-											console.log(`document/${docid} uploaded`);
-										}
-
 										s3putDocument(s3, doc, key, buffer, (err, data) => {
 											if (err) {
 												return callback(err);
