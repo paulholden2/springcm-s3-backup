@@ -73,6 +73,7 @@ function backup(opts) {
 	var docUploads = 0;
 	var folderUploads = 0;
 	const parallel = opts.parallel;
+	const del = opts.delete;
 
 	async.waterfall([
 		// SpringCM auth
@@ -146,104 +147,12 @@ function backup(opts) {
 			});
 		},
 		(s3, root, callback) => {
-			var count = 1;
-			var marker = null;
-			var depot = {
-				documents: [],
-				folders: []
-			};
-
-			console.log('Getting documents in S3');
-
-			async.until(() => {
-				return count === 0;
-			}, (callback) => {
-				var params = {
-					Bucket: process.env.S3_BUCKET,
-					Prefix: 'document/',
-					MaxKeys: 1000
-				};
-
-				if (marker) {
-					params.Marker = marker;
-					marker = null;
-				}
-
-				s3.listObjects(params, (err, data) => {
-					if (err) {
-						return callback(err);
-					}
-
-					count = data.Contents.length;
-
-					if (count > 0) {
-						depot.documents = depot.documents.concat(data.Contents);
-						marker = data.Contents[count - 1].Key;
-					}
-
-					callback();
-				});
-			}, (err) => {
-				if (err) {
-					return callback(err);
-				}
-
-				depot.documents = _.zipObject(depot.documents.map(d => d.Key), depot.documents);
-
-				callback(null, s3, root, depot);
-			});
-		},
-		(s3, root, depot, callback) => {
-			var count = 1;
-			var marker = null;
-
-			console.log('Getting folders in S3');
-
-			async.until(() => {
-				return count === 0;
-			}, (callback) => {
-				var params = {
-					Bucket: process.env.S3_BUCKET,
-					Prefix: 'folder/',
-					MaxKeys: 1000
-				};
-
-				if (marker) {
-					params.Marker = marker;
-					marker = null;
-				}
-
-				s3.listObjects(params, (err, data) => {
-					if (err) {
-						return callback(err);
-					}
-
-					count = data.Contents.length;
-
-					if (count > 0) {
-						depot.folders = depot.folders.concat(data.Contents);
-						marker = data.Contents[count - 1].Key;
-					}
-
-					callback();
-				});
-			}, (err) => {
-				if (err) {
-					return callback(err);
-				}
-
-				depot.folders = _.zipObject(depot.folders.map(f => f.Key), depot.folders);
-
-				callback(null, s3, root, depot);
-			});
-		},
-		(s3, root, depot, callback) => {
 			var q = async.queue((folder, callback) => {
+				var uploadFolder = false;
 				const fuid = folder.href.self.slice(-36);
 
 				async.waterfall([
 					(callback) => {
-						folderUploads += 1;
 						callback();
 					},
 					(callback) => {
@@ -268,56 +177,11 @@ function backup(opts) {
 						});
 					},
 					(folder, callback) => {
-						// Upload folder
-						if (opts.verbose) {
-							console.log(`folder/${fuid} uploaded`);
-						}
-
-						s3.putObject({
-							Bucket: process.env.S3_BUCKET,
-							Key: 'folder/' + fuid,
-							Metadata: {
-								'filepath': folder.path
-							}
-						}, (err, data) => {
-							if (err) {
-								return callback(err);
-							}
-
-							delete depot.folders['folder/' + fuid]
-
-							callback(null, folder);
-						});
-					},
-					(folder, callback) => {
-						// Upload folder attributes
-						if (opts.verbose) {
-							console.log(`attributes/${fuid} uploaded`);
-						}
-
-						s3.putObject({
-							Body: JSON.stringify(folder.attributes),
-							Bucket: process.env.S3_BUCKET,
-							Key: 'attributes/' + fuid,
-							Metadata: {
-								'filepath': folder.path
-							}
-						}, (err, data) => {
-							if (err) {
-								return callback(err);
-							}
-
-							callback(null, folder);
-						});
-					},
-					(folder, callback) => {
 						// Request document to get attributes
 						SpringCM.folder.documents(folder, (err, documents) => {
 							if (err) {
 								return callback(err);
 							}
-
-							docUploads += documents.length;
 
 							async.mapSeries(documents, (doc, callback) => {
 								SpringCM.document.uid(doc.href.self.slice(-36), (err, doc) => {
@@ -332,35 +196,42 @@ function backup(opts) {
 									return callback(err);
 								}
 
-								callback(null, documents);
+								callback(null, folder, documents);
 							});
 						});
 					},
-					(documents, callback) => {
+					(folder, documents, callback) => {
 						async.eachSeries(documents, (doc, callback) => {
 							const docid = doc.href.self.slice(-36);
 							const key = 'document/' + docid;
 
 							async.waterfall([
 								(callback) => {
-									if (depot.documents.hasOwnProperty(key)) {
-										var lastBackup = moment(depot.documents[key].LastModified);
+									s3.headObject({
+										Bucket: process.env.S3_BUCKET,
+										Key: key
+									}, (err, data) => {
+										if (err) {
+											// If error because object doesn't exist
+											if (err.code === 'NotFound') {
+												return callback(null, false);
+											} else {
+												return callback(err);
+											}
+										}
+
+										var lastBackup = moment(data.LastModified);
 										var updated = moment(doc.updated);
 
-										// If the last backup date of the doc is after the
-										// update date on the doc in SpringCM, no need to back up
-										if (lastBackup.isAfter(updated)) {
-											return callback(null, true);
-										}
-									}
-
-									// Default to making a backup of the doc
-									return callback(null, false);
+										callback(null, lastBackup.isAfter(updated));
+									});
 								},
 								(recent, callback) => {
 									if (recent && !opts.overwrite) {
 										return callback(null, null);
 									}
+
+									uploadFolder = true;
 
 									var stream;
 
@@ -371,6 +242,8 @@ function backup(opts) {
 										if (err) {
 											return callback(err);
 										}
+
+										docUploads += 1;
 
 										callback(null, stream);
 									});
@@ -454,8 +327,6 @@ function backup(opts) {
 									});
 								},
 								(callback) => {
-									delete depot.documents[key];
-
 									callback();
 								}
 							], (err) => {
@@ -466,7 +337,84 @@ function backup(opts) {
 								return callback(err);
 							}
 
-							callback(null);
+							callback(null, folder);
+						});
+					},
+					(folder, callback) => {
+						s3.headObject({
+							Bucket: process.env.S3_BUCKET,
+							Key: 'folder/' + folder.href.self.slice(-36)
+						}, (err, data) => {
+							if (err) {
+								// If error because object doesn't exist
+								if (err.code === 'NotFound') {
+									uploadFolder = true;
+									return callback(null, folder);
+								} else {
+									return callback(err);
+								}
+							}
+
+							var lastBackup = moment(data.LastModified);
+							var updated = moment(folder.updated);
+
+							if (!lastBackup.isAfter(updated)) {
+								uploadFolder = true;
+							}
+
+							callback(null, folder);
+						});
+					},
+					(folder, callback) => {
+						if (!uploadFolder) {
+							console.log(`folder/${folder.href.self.slice(-36)} up-to-date; nothing changed`);
+							return callback(null, folder);
+						}
+
+						// Upload folder
+						if (opts.verbose) {
+							console.log(`folder/${fuid} uploaded`);
+						}
+
+						s3.putObject({
+							Bucket: process.env.S3_BUCKET,
+							Key: 'folder/' + fuid,
+							Metadata: {
+								'filepath': folder.path
+							}
+						}, (err, data) => {
+							if (err) {
+								return callback(err);
+							}
+
+							folderUploads += 1;
+
+							callback(null, folder);
+						});
+					},
+					(folder, callback) => {
+						if (!uploadFolder) {
+							return callback();
+						}
+
+						// Upload folder attributes
+						if (opts.verbose) {
+							console.log(`attributes/${fuid} uploaded`);
+						}
+
+						s3.putObject({
+							Body: JSON.stringify(folder.attributes),
+							Bucket: process.env.S3_BUCKET,
+							Key: 'attributes/' + fuid,
+							Metadata: {
+								'filepath': folder.path
+							}
+						}, (err, data) => {
+							if (err) {
+								return callback(err);
+							}
+
+							callback(null, folder);
 						});
 					}
 				], (err) => {
@@ -477,36 +425,8 @@ function backup(opts) {
 			q.push(root);
 
 			q.drain = () => {
-				callback(null, s3, depot);
-			};
-		},
-		(s3, depot, callback) => {
-			var keys = [];
-
-			keys = keys.concat(Object.keys(depot.documents), Object.keys(depot.folders));
-
-			async.eachSeries(keys, (obj, callback) => {
-				s3.deleteObject({
-					Bucket: process.env.S3_BUCKET,
-					Key: obj
-				}, (err, data) => {
-					if (err) {
-						return callback(err);
-					}
-
-					if (opts.verbose) {
-						console.log(`${obj} not found; removed from backup`);
-					}
-
-					callback();
-				});
-			}, (err) => {
-				if (err) {
-					return callback(err);
-				}
-
 				callback();
-			});
+			};
 		},
 		(callback) => {
 			if (opts.verbose) {
