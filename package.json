@@ -1,5 +1,5 @@
 {
-  "name": "springcm-node-backup",
+  "name": "springcm-s3-backup",
   "version": "0.1.0",
   "description": "",
   "main": "index.js",
@@ -8,7 +8,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+ssh://git@bitbucket.org/stria/springcm-node-backup.git"
+    "url": "git+ssh://git@github.com/paulholden2/springcm-s3-backup.git"
   },
   "keywords": [
     "spring",
@@ -21,7 +21,7 @@
     "service"
   ],
   "author": "Paul Holden",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "homepage": "https://bitbucket.org/stria/springcm-node-backup#readme",
   "dependencies": {
     "async": "^2.6.1",
